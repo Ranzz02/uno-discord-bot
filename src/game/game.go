@@ -1,12 +1,8 @@
 package game
 
 import (
-	"fmt"
-	"log"
-	"math/rand"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/bwmarrin/discordgo"
 	gonanoid "github.com/matoous/go-nanoid/v2"
@@ -20,6 +16,7 @@ const (
 	// Playing
 	UNOButton       string = "uno_button"
 	ViewCardsButton string = "view_cards_button"
+	DrawCardAction  string = "draw-card"
 )
 
 var (
@@ -45,35 +42,7 @@ type Game struct {
 	UNO         bool
 	State       GameState
 	Host        string
-}
-
-// Shuffle deck of cards
-func ShuffleDeck(deck []Card) {
-	rand.Shuffle(len(deck), func(i, j int) {
-		deck[i], deck[j] = deck[j], deck[i]
-	})
-}
-
-// Draw cards from deck
-func DrawCards(deck *[]Card, num int) []Card {
-	if len(*deck) < num {
-		num = len(*deck)
-	}
-	drawn := (*deck)[:num]
-	*deck = (*deck)[num:]
-	return drawn
-}
-
-// Find a game
-func FindGame(guildId string) *Game {
-	gamesMux.Lock()
-	defer gamesMux.Unlock()
-
-	g, ok := games[guildId]
-	if !ok {
-		return nil
-	}
-	return g
+	Interaction *discordgo.Interaction
 }
 
 // Start a new game
@@ -82,6 +51,7 @@ func NewGame(i *discordgo.InteractionCreate) *Game {
 	if err != nil {
 		return nil
 	}
+
 	game := &Game{
 		ID:          id,
 		Deck:        GenerateDeck(),
@@ -91,405 +61,97 @@ func NewGame(i *discordgo.InteractionCreate) *Game {
 		State:       Lobby,
 		UNO:         false,
 		Host:        i.Member.User.ID,
+		Interaction: i.Interaction,
 	}
 
+	// Shuffle deck
 	ShuffleDeck(game.Deck)
+	game.TopCard()
+
+	// Select the first card and validate it's not a Wild or Wild Draw Four
+	firstCard := game.Deck[0] // Get the first card from the shuffled deck
+
+	// Ensure the first card isn't a Wild or Wild Draw Four card
+	for firstCard.Type == WildCard || firstCard.Type == WildDrawFourCard {
+		// If it's a Wild or Wild Draw Four, reshuffle the deck and pick a new first card
+		ShuffleDeck(game.Deck)
+		firstCard = game.Deck[0]
+	}
+
+	// Place the first valid card on the discard pile
+	game.DiscardPile = append(game.DiscardPile, firstCard)
+	game.Deck = game.Deck[1:] // Remove the first card from the deck
 
 	game.Players = append(game.Players, &Player{
 		User: i.Member.User,
-		Hand: DrawCards(&game.Deck, 7),
+		Hand: DrawCards(game, 7),
 		Role: Host,
 	})
 
 	gamesMux.Lock()
-	games[i.GuildID] = game
+	games[i.ChannelID] = game
 	gamesMux.Unlock()
 
 	return game
 }
 
-// Function to render the game state
-func (g *Game) RenderEmbed() *discordgo.InteractionResponseData {
-	switch g.State {
-	case Lobby: // Lobby / start of game
-		components := []discordgo.MessageComponent{
-			&discordgo.ActionsRow{
-				Components: []discordgo.MessageComponent{
-					&discordgo.Button{
-						Label:    "Start",
-						Style:    discordgo.SuccessButton,
-						CustomID: StartButton,
-						Disabled: len(g.Players) < 2 || g.State != Lobby,
-					},
-					&discordgo.Button{
-						Label:    "Join",
-						Style:    discordgo.PrimaryButton,
-						CustomID: JoinButton,
-					},
-					&discordgo.Button{
-						Label:    "Leave",
-						Style:    discordgo.SecondaryButton,
-						CustomID: LeaveButton,
-					},
-					&discordgo.Button{
-						Label:    "End Game",
-						Style:    discordgo.DangerButton,
-						CustomID: EndButton,
-					},
-				},
-			},
-		}
+// Find a game
+func FindGame(gameID string) *Game {
+	gamesMux.Lock()
+	defer gamesMux.Unlock()
 
-		// Create the player list as a string (user names or user IDs)
-		var playerNames []string
-		for _, player := range g.Players {
-			// Replace player.UserID with player.Name if you want to display usernames instead of user IDs
-			playerNames = append(playerNames, "<@"+player.User.ID+">") // Mention the user using the Discord format
-		}
-
-		// Join player names into a string with each player on a new line
-		playerList := strings.Join(playerNames, "\n")
-
-		embed := &discordgo.MessageEmbed{
-			Title:       "UNO Game Lobby",
-			Description: "Welcome to the UNO game lobby! Press 'Join' to join the game, or the host can press 'Start' to begin.",
-			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:   "Players",
-					Value:  playerList,
-					Inline: false,
-				},
-			},
-			Color: 0x00ff00,
-			Image: &discordgo.MessageEmbedImage{
-				URL: Cards[0].Link,
-			},
-		}
-
-		return &discordgo.InteractionResponseData{
-			Embeds:     []*discordgo.MessageEmbed{embed},
-			Components: components,
-		}
-	case Playing: // Playing
-		components := []discordgo.MessageComponent{
-			&discordgo.ActionsRow{
-				Components: []discordgo.MessageComponent{
-					&discordgo.Button{
-						Label:    "UNO!",
-						Style:    discordgo.PrimaryButton,
-						CustomID: UNOButton,
-						Disabled: !g.UNO,
-					},
-					&discordgo.Button{
-						Label:    "View Cards",
-						Style:    discordgo.SuccessButton,
-						CustomID: ViewCardsButton,
-					},
-					&discordgo.Button{
-						Label:    "Leave",
-						Style:    discordgo.SecondaryButton,
-						CustomID: LeaveButton,
-					},
-					&discordgo.Button{
-						Label:    "End Game",
-						Style:    discordgo.DangerButton,
-						CustomID: EndButton,
-					},
-				},
-			},
-		}
-
-		// Create the player list as a string (user names or user IDs)
-		var playerNames []string
-		for _, player := range g.Players {
-			if player.User.ID == g.CurrentPlayer().User.ID {
-				// Replace player.UserID with player.Name if you want to display usernames instead of user IDs
-				playerNames = append(playerNames, fmt.Sprintf(">**"+player.User.Username+"**: %d", len(player.Hand))) // Mention the user using the Discord format
-				continue
-			}
-			// Replace player.UserID with player.Name if you want to display usernames instead of user IDs
-			playerNames = append(playerNames, fmt.Sprintf(""+player.User.Username+": %d", len(player.Hand))) // Mention the user using the Discord format
-		}
-
-		// Join player names into a string with each player on a new line
-		playerList := strings.Join(playerNames, "\n")
-
-		embed := &discordgo.MessageEmbed{
-			Title:       "It's " + g.CurrentPlayer().User.Username + " turn!",
-			Description: "Current card is: ",
-			Color:       0x00ff00,
-			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:   "Players",
-					Value:  playerList,
-					Inline: false,
-				},
-			},
-			Image: &discordgo.MessageEmbedImage{
-				URL: g.Deck[0].Link,
-			},
-		}
-
-		return &discordgo.InteractionResponseData{
-			Embeds:     []*discordgo.MessageEmbed{embed},
-			Components: components,
-		}
-	default:
-		return &discordgo.InteractionResponseData{
-			Content: "Default",
-		}
+	g, ok := games[gameID]
+	if !ok {
+		return nil
 	}
+	return g
 }
 
-// Get player with id
-func (g *Game) GetPlayer(userId string) *Player {
-	for _, player := range g.Players {
-		if player.User.ID == userId {
-			return player
-		}
-	}
-	return nil
-}
+func (g *Game) TopCard() Card {
+	// Check if the discard pile is empty
+	if len(g.DiscardPile) == 0 {
+		// If the discard pile is empty, draw the first card from the deck
+		firstCard := g.Deck[0]
 
-// Get current player
-func (g *Game) CurrentPlayer() *Player {
-	return g.Players[g.CurrentTurn]
-}
-
-// Get next player
-func (g *Game) GetNextPlayer() *Player {
-	if g.Reversed {
-		// If the direction is reversed, move backwards.
-		return g.Players[(g.CurrentTurn-1+len(g.Players))%len(g.Players)]
-	}
-	// Otherwise, move forwards.
-	return g.Players[(g.CurrentTurn+1)%len(g.Players)]
-}
-
-// Moves turn to the next player
-func (g *Game) NextTurn() {
-	if g.Reversed {
-		g.CurrentTurn--
-		if g.CurrentTurn < 0 {
-			g.CurrentTurn = len(g.Players) - 1
-		}
-	} else {
-		g.CurrentTurn++
-		if g.CurrentTurn >= len(g.Players) {
-			g.CurrentTurn = 0
-		}
-	}
-}
-
-// Tries to play a players card on their turn
-func (g *Game) PlayCard(card *Card) error {
-	player := g.CurrentPlayer()
-
-	newHand := []Card{}
-	for _, handCard := range player.Hand {
-		if handCard.Name == card.Name {
-			continue
-		}
-		newHand = append(newHand, handCard)
-	}
-	player.Hand = newHand
-
-	switch card.Type {
-	case NumberCard:
-		g.NextTurn()
-	case SkipCard:
-		g.NextTurn()
-		g.NextTurn()
-	case ReverseCard:
-		g.Reversed = !g.Reversed
-		g.NextTurn()
-	case DrawTwoCard:
-		// Force the next player to draw two cards and skip their turn.
-		nextPlayer := g.GetNextPlayer()
-		drawnCards := DrawCards(&g.Deck, 2)
-		nextPlayer.Hand = append(nextPlayer.Hand, drawnCards...)
-		g.NextTurn()
-		g.NextTurn()
-	case WildCard:
-		// Allow the current player to change the color. (This is a simple placeholder for the logic.)
-		// You might want to implement a way to let the player choose the color.
-		// For now, we'll just set a random color for demonstration.
-		g.ChangeColor("red") // Example, change to red.
-
-		// Move to the next player's turn.
-		g.NextTurn()
-	case WildDrawFourCard:
-		// Force the next player to draw four cards and skip their turn.
-		nextPlayer := g.GetNextPlayer()
-		drawnCards := DrawCards(&g.Deck, 4)
-		nextPlayer.Hand = append(nextPlayer.Hand, drawnCards...)
-		g.ChangeColor("blue") // Example, change to blue.
-
-		// Skip the next player's turn after they draw.
-		g.NextTurn()
-		g.NextTurn()
-	}
-
-	return nil
-}
-
-// Change the current color for Wild and WildDrawFour cards
-func (g *Game) ChangeColor(newColor string) {
-	// Here you can implement logic to set the color for the game
-	// For example, you can store it in the game state and check the current color when players play cards.
-	// This is just a placeholder.
-	fmt.Println("Changing color to", newColor)
-}
-
-// Add player to the game
-func (g *Game) AddPlayer(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if g.State != Lobby {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Data: &discordgo.InteractionResponseData{
-				Content: "This game started already.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-		})
-		return
-	}
-
-	exists := false
-	for _, player := range g.Players {
-		if player.User.ID == i.Member.User.ID {
-			exists = true
-			break
-		}
-	}
-
-	if exists {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Data: &discordgo.InteractionResponseData{
-				Content: "You are already in the game.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-		})
-		return
-	}
-
-	g.Players = append(g.Players, &Player{
-		User: i.Member.User,
-		Hand: DrawCards(&g.Deck, 7),
-		Role: Normal,
-	})
-
-	// Respond with the updated embed, rendering the correct buttons
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Data: g.RenderEmbed(),
-		Type: discordgo.InteractionResponseUpdateMessage,
-	})
-
-}
-
-// Player leaves the game
-func (g *Game) LeaveGame(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if g.State != Lobby {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Data: &discordgo.InteractionResponseData{
-				Content: "This game started already. Wait till it ends",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-		})
-		return
-	}
-
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseUpdateMessage,
-		Data: g.RenderEmbed(),
-	})
-}
-
-// Start game
-func (g *Game) StartGame(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if g.Host == i.Member.User.ID {
-		g.State = Playing
-		// Send an update with the embed (you can modify the existing message or send a new one)
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Data: g.RenderEmbed(),
-			Type: discordgo.InteractionResponseUpdateMessage,
-		})
-	} else if len(g.Players) >= 2 {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Data: &discordgo.InteractionResponseData{
-				Content: "Not enough players",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-		})
-	} else {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Data: &discordgo.InteractionResponseData{
-				Content: "You are not the host of the game.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-		})
-	}
-}
-
-// End game early
-func (g *Game) Delete(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if g.Host == i.Member.User.ID {
-		log.Println("Ending game")
-
-		interaction := i.Interaction
-		embed := &discordgo.MessageEmbed{
-			Title:       "Game ended",
-			Description: "Game was deleted by host",
-			Color:       0xFF0000, // Red color code
+		// Ensure the first card isn't a Wild or Wild Draw Four card
+		for firstCard.Type == WildCard || firstCard.Type == WildDrawFourCard {
+			// If it's a Wild or Wild Draw Four, reshuffle the deck and pick a new first card
+			ShuffleDeck(g.Deck)
+			firstCard = g.Deck[0]
 		}
 
-		s.InteractionRespond(interaction, &discordgo.InteractionResponse{
-			Data: &discordgo.InteractionResponseData{
-				Embeds: []*discordgo.MessageEmbed{embed},
-			},
-			Type: discordgo.InteractionResponseUpdateMessage,
-		})
+		// Place the valid card on the discard pile and remove it from the deck
+		g.DiscardPile = append(g.DiscardPile, firstCard)
+		g.Deck = g.Deck[1:] // Remove the first card from the deck
 
-		go func() {
-			time.Sleep(2 * time.Second)
-			s.InteractionResponseDelete(interaction)
-		}()
-
-		delete(games, g.ID)
-	} else {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Data: &discordgo.InteractionResponseData{
-				Content: "Only host can end game.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-		})
+		return firstCard
 	}
+
+	return g.DiscardPile[len(g.DiscardPile)-1]
 }
 
-// View card deck
-func (g *Game) ViewCards(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	player := g.GetPlayer(i.Member.User.ID)
+// Function to check if card can be played
+func (g *Game) CanPlayCard(card *Card) bool {
+	topCard := g.TopCard()
 
-	desc := "It's your turn!"
-	if &player.User.ID != &i.Member.User.ID {
-		desc = fmt.Sprintf("It's %s turn", g.CurrentPlayer().User.Username)
+	if card.Type == WildCard || card.Type == WildDrawFourCard {
+		return true
 	}
 
-	embed := &discordgo.MessageEmbed{
-		Title:       fmt.Sprintf("You have %d", len(player.Hand)),
-		Description: desc,
-		Color:       0xFF0000, // Red color code
+	// Split the card name to get color and type (number)
+	cardDetails := strings.Split(card.Name, "-")
+	cardColor := cardDetails[0]
+	cardType := cardDetails[1]
+
+	// Split the top card to get the color and type
+	topCardDetails := strings.Split(topCard.Name, "-")
+	topCardColor := topCardDetails[0]
+	topCardType := topCardDetails[1]
+
+	// Check if the card can be played (must match either color or type)
+	if cardColor == topCardColor || cardType == topCardType {
+		return true
 	}
 
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Embeds: []*discordgo.MessageEmbed{embed},
-			Flags:  discordgo.MessageFlagsEphemeral,
-		},
-	})
+	return false
 }
