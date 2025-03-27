@@ -1,7 +1,7 @@
 package game
 
 import (
-	"fmt"
+	"log"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -68,20 +68,15 @@ func (g *Game) PlayCard(s *discordgo.Session, i *discordgo.InteractionCreate, ca
 		g.NextTurn()
 		g.NextTurn()
 	case WildCard:
-		// Allow the current player to change the color. (This is a simple placeholder for the logic.)
-		// You might want to implement a way to let the player choose the color.
-		// For now, we'll just set a random color for demonstration.
-		g.ChangeColor("red") // Example, change to red.
-
+		g.ChangeColor(s, i)
 		// Move to the next player's turn.
 		g.NextTurn()
 	case WildDrawFourCard:
 		// Force the next player to draw four cards and skip their turn.
+		g.ChangeColor(s, i)
 		nextPlayer := g.GetNextPlayer()
 		drawnCards := DrawCards(g, 4)
 		nextPlayer.Hand = append(nextPlayer.Hand, drawnCards...)
-		g.ChangeColor("blue") // Example, change to blue.
-
 		// Skip the next player's turn after they draw.
 		g.NextTurn()
 		g.NextTurn()
@@ -93,11 +88,86 @@ func (g *Game) PlayCard(s *discordgo.Session, i *discordgo.InteractionCreate, ca
 }
 
 // Change the current color for Wild and WildDrawFour cards
-func (g *Game) ChangeColor(newColor string) {
-	// Here you can implement logic to set the color for the game
-	// For example, you can store it in the game state and check the current color when players play cards.
-	// This is just a placeholder.
-	fmt.Println("Changing color to", newColor)
+func (g *Game) ChangeColor(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	// Send an ephemeral message asking the player to select a color
+	colorPrompt := "Please select a color for the Wild card!"
+
+	// Send the message to the player, this will be ephemeral (only visible to the player)
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Data: &discordgo.InteractionResponseData{
+			Embeds: []*discordgo.MessageEmbed{
+				{
+					Title:       "Select color",
+					Description: colorPrompt,
+				},
+			},
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						&discordgo.Button{
+							Label:    "🟥 Red",
+							Style:    discordgo.SecondaryButton,
+							CustomID: "color_red",
+						},
+						&discordgo.Button{
+							Label:    "🟩 Green",
+							Style:    discordgo.SecondaryButton,
+							CustomID: "color_green",
+						},
+						&discordgo.Button{
+							Label:    "🟦 Blue",
+							Style:    discordgo.SecondaryButton,
+							CustomID: "color_blue",
+						},
+						&discordgo.Button{
+							Label:    "🟨 Yellow",
+							Style:    discordgo.SecondaryButton,
+							CustomID: "color_yellow",
+						},
+					},
+				},
+			},
+			Flags: discordgo.MessageFlagsEphemeral,
+		},
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+	})
+	if err != nil {
+		log.Printf("Error sending color selection message: %v", err)
+		return
+	}
+
+	// Wait for the user to react with one of the color emojis
+	g.WaitForColorSelection(s, i)
+}
+
+func (g *Game) WaitForColorSelection(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	s.AddHandlerOnce(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if i.Type != discordgo.InteractionMessageComponent {
+			return
+		}
+
+		data := i.MessageComponentData()
+
+		var selectedColor string
+		switch data.CustomID {
+		case "🟥":
+			selectedColor = "color_red"
+		case "🟩":
+			selectedColor = "color_green"
+		case "🟦":
+			selectedColor = "color_blue"
+		case "🟨":
+			selectedColor = "color_yellow"
+		default:
+			// If the reaction is not valid, ignore it
+			return
+		}
+
+		// Update the game state with the selected color
+		g.CurrentColor = &selectedColor
+
+		g.NextTurn()
+	})
 }
 
 func (g *Game) DrawCard(s *discordgo.Session, i *discordgo.InteractionCreate) {

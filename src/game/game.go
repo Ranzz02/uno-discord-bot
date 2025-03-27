@@ -33,16 +33,17 @@ const (
 )
 
 type Game struct {
-	ID          string
-	Deck        []Card
-	DiscardPile []Card
-	Players     []*Player
-	CurrentTurn int
-	Reversed    bool
-	UNO         bool
-	State       GameState
-	Host        string
-	Interaction *discordgo.Interaction
+	ID           string
+	Deck         []Card
+	DiscardPile  []Card
+	Players      []*Player
+	CurrentTurn  int
+	Reversed     bool
+	UNO          bool
+	State        GameState
+	Host         string
+	Interaction  *discordgo.Interaction
+	CurrentColor *string
 }
 
 // Start a new game
@@ -72,7 +73,7 @@ func NewGame(i *discordgo.InteractionCreate) *Game {
 	firstCard := game.Deck[0] // Get the first card from the shuffled deck
 
 	// Ensure the first card isn't a Wild or Wild Draw Four card
-	for firstCard.Type == WildCard || firstCard.Type == WildDrawFourCard {
+	for firstCard.Type != NumberCard {
 		// If it's a Wild or Wild Draw Four, reshuffle the deck and pick a new first card
 		ShuffleDeck(game.Deck)
 		firstCard = game.Deck[0]
@@ -147,6 +148,11 @@ func (g *Game) CanPlayCard(card *Card) bool {
 	topCardDetails := strings.Split(topCard.Name, "-")
 	topCardColor := topCardDetails[0]
 	topCardType := topCardDetails[1]
+
+	// If wild card
+	if topCardColor == "wild" && g.CurrentColor != nil && *g.CurrentColor == cardColor {
+		return true
+	}
 
 	// Check if the card can be played (must match either color or type)
 	if cardColor == topCardColor || cardType == topCardType {
