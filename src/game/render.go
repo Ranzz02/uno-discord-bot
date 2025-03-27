@@ -9,7 +9,7 @@ import (
 )
 
 // Function to render the game state
-func (g *Game) RenderEmbed() *discordgo.InteractionResponseData {
+func (g *Game) RenderEmbed(s *discordgo.Session) *discordgo.InteractionResponseData {
 	switch g.State {
 	case Lobby: // Lobby / start of game
 		components := []discordgo.MessageComponent{
@@ -40,27 +40,11 @@ func (g *Game) RenderEmbed() *discordgo.InteractionResponseData {
 			},
 		}
 
-		// Create the player list as a string (user names or user IDs)
-		var playerNames []string
-		for _, player := range g.Players {
-			// Replace player.UserID with player.Name if you want to display usernames instead of user IDs
-			playerNames = append(playerNames, "<@"+player.User.ID+">") // Mention the user using the Discord format
-		}
-
-		// Join player names into a string with each player on a new line
-		playerList := strings.Join(playerNames, "\n")
-
 		embed := &discordgo.MessageEmbed{
 			Title:       "UNO Game Lobby",
 			Description: "Welcome to the UNO game lobby! Press 'Join' to join the game, or the host can press 'Start' to begin.",
-			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:   "Players",
-					Value:  playerList,
-					Inline: false,
-				},
-			},
-			Color: 0x00ff00,
+			Fields:      playersList(g),
+			Color:       0x00ff00,
 			Image: &discordgo.MessageEmbedImage{
 				URL: Cards[0].Link,
 			},
@@ -71,6 +55,34 @@ func (g *Game) RenderEmbed() *discordgo.InteractionResponseData {
 			Components: components,
 		}
 	case Playing: // Playing
+		// Check if the top card is a Wild Card
+		topCard := g.TopCard()
+		var colorDisplay string
+
+		var wildCardColor *discordgo.MessageEmbedField
+		if topCard.Type == WildCard || topCard.Type == WildDrawFourCard {
+			colorEmojiMap := map[string]string{
+				"red":    "🟥",
+				"green":  "🟩",
+				"blue":   "🟦",
+				"yellow": "🟨",
+			}
+
+			selectedColor := *g.CurrentColor
+			colorEmoji, exists := colorEmojiMap[selectedColor]
+			if !exists {
+				colorEmoji = "⬜" // Default if color isn't set
+			}
+
+			colorDisplay = fmt.Sprintf("%s %s", colorEmoji, strings.ToUpper(selectedColor))
+
+			wildCardColor = &discordgo.MessageEmbedField{
+				Name:   "Wild Color:",
+				Value:  colorDisplay,
+				Inline: true,
+			}
+		}
+
 		components := []discordgo.MessageComponent{
 			&discordgo.ActionsRow{
 				Components: []discordgo.MessageComponent{
@@ -99,32 +111,17 @@ func (g *Game) RenderEmbed() *discordgo.InteractionResponseData {
 			},
 		}
 
-		// Create the player list as a string (user names or user IDs)
-		var playerNames []string
-		for _, player := range g.Players {
-			if player.User.ID == g.GetCurrentPlayer().User.ID {
-				// Replace player.UserID with player.Name if you want to display usernames instead of user IDs
-				playerNames = append(playerNames, fmt.Sprintf(">**"+player.User.Username+"**: %d", len(player.Hand))) // Mention the user using the Discord format
-				continue
-			}
-			// Replace player.UserID with player.Name if you want to display usernames instead of user IDs
-			playerNames = append(playerNames, fmt.Sprintf(""+player.User.Username+": %d", len(player.Hand))) // Mention the user using the Discord format
+		// Add wildCardColor
+		fields := playersList(g)
+		if wildCardColor != nil {
+			fields = append(fields, wildCardColor)
 		}
-
-		// Join player names into a string with each player on a new line
-		playerList := strings.Join(playerNames, "\n")
 
 		embed := &discordgo.MessageEmbed{
 			Title:       "It's " + g.GetCurrentPlayer().User.Username + " turn!",
-			Description: "Current card is: ",
+			Description: fmt.Sprintf("Current card is: **%s**", topCard.Name),
 			Color:       0x00ff00,
-			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:   "Players",
-					Value:  playerList,
-					Inline: false,
-				},
-			},
+			Fields:      fields,
 			Image: &discordgo.MessageEmbedImage{
 				URL: g.TopCard().Link,
 			},
@@ -134,6 +131,62 @@ func (g *Game) RenderEmbed() *discordgo.InteractionResponseData {
 			Embeds:     []*discordgo.MessageEmbed{embed},
 			Components: components,
 		}
+	case EndScreen:
+		var winner *Player
+		var players []*Player
+		for _, player := range g.Players {
+			if len(player.Hand) <= 0 {
+				winner = player
+				continue
+			}
+			players = append(players, player)
+		}
+
+		var playerList string
+		for _, player := range players {
+			playerList = playerList + fmt.Sprintf("<@%s> **__%d__** cards left!\n", player.User.ID, len(player.Hand))
+		}
+
+		embeds :=
+			[]*discordgo.MessageEmbed{
+				{
+					Title:       "UNO Game Ended",
+					Description: "Game has come to an end",
+					Color:       0x00ff00,
+					Fields: []*discordgo.MessageEmbedField{
+						{
+							Name:   "Winner 👑",
+							Value:  fmt.Sprintf("<@%s>", winner.User.ID),
+							Inline: false,
+						},
+						{
+							Name:   "Players",
+							Value:  playerList,
+							Inline: false,
+						},
+					},
+					Thumbnail: &discordgo.MessageEmbedThumbnail{
+						URL: winner.User.AvatarURL("1024"),
+					},
+				},
+			}
+
+		components := []discordgo.MessageComponent{
+			discordgo.ActionsRow{
+				Components: []discordgo.MessageComponent{
+					&discordgo.Button{
+						Label:    "Play Again",
+						Style:    discordgo.PrimaryButton,
+						CustomID: ReplayButton,
+					},
+				},
+			},
+		}
+
+		return &discordgo.InteractionResponseData{
+			Embeds:     embeds,
+			Components: components,
+		}
 	default:
 		return &discordgo.InteractionResponseData{
 			Content: "Default",
@@ -141,28 +194,31 @@ func (g *Game) RenderEmbed() *discordgo.InteractionResponseData {
 	}
 }
 
-// Helper function to create an ephemeral response
-func ephemeralResponse(content string) *discordgo.InteractionResponse {
-	return &discordgo.InteractionResponse{
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-			Flags:   discordgo.MessageFlagsEphemeral,
-		},
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-	}
-}
+// Helper function to return PlayerList
+func playersList(g *Game) []*discordgo.MessageEmbedField {
+	// Create the player list as a string (user names or user IDs)
+	var playerNames []string
+	currentPlayerID := g.GetCurrentPlayer().User.ID
 
-// Helper function to create a simple embed
-func simpleEmbed(title, description string) *discordgo.InteractionResponse {
-	return &discordgo.InteractionResponse{
-		Data: &discordgo.InteractionResponseData{
-			Embeds: []*discordgo.MessageEmbed{
-				{
-					Title:       title,
-					Description: description,
-					Color:       0xFF0000,
-				},
-			},
+	for _, player := range g.Players {
+		playerFormat := fmt.Sprintf("<@%s>: **__%d__**", player.User.ID, len(player.Hand))
+
+		if g.State == Playing && player.User.ID == currentPlayerID {
+			// Replace player.UserID with player.Name if you want to display usernames instead of user IDs
+			playerFormat = fmt.Sprintf("> 🎯 <@%s>: **__%d__**", player.User.ID, len(player.Hand))
+		}
+		// Replace player.UserID with player.Name if you want to display usernames instead of user IDs
+		playerNames = append(playerNames, playerFormat) // Mention the user using the Discord format
+	}
+
+	// Join player names into a string with each player on a new line
+	playerList := strings.Join(playerNames, "\n")
+
+	return []*discordgo.MessageEmbedField{
+		{
+			Name:   "Players",
+			Value:  playerList,
+			Inline: false,
 		},
 	}
 }
@@ -170,9 +226,9 @@ func simpleEmbed(title, description string) *discordgo.InteractionResponse {
 func renderPlayerHand(g *Game, playerID string) *discordgo.InteractionResponseData {
 	player := g.GetPlayer(playerID)
 
-	desc := "It's your turn!"
+	turnTitle := "It's your turn!"
 	if g.GetCurrentPlayer().User.ID != playerID {
-		desc = fmt.Sprintf("It's %s turn", g.GetCurrentPlayer().User.Username)
+		turnTitle = fmt.Sprintf("It's %s turn", g.GetCurrentPlayer().User.Username)
 	}
 
 	// Create buttons for each card
@@ -196,7 +252,7 @@ func renderPlayerHand(g *Game, playerID string) *discordgo.InteractionResponseDa
 			Label:    colorEmoji + strings.ToUpper(card.Name),
 			Style:    discordgo.PrimaryButton,
 			CustomID: "card-" + card.ID,
-			Disabled: g.GetCurrentPlayer().User.ID != player.User.ID, // Disable if not player's turn
+			Disabled: g.GetCurrentPlayer().User.ID != player.User.ID || !g.CanPlayCard(&card), // Disable if not player's turn
 		})
 	}
 	// Add the "Draw Card" button separately
@@ -220,8 +276,8 @@ func renderPlayerHand(g *Game, playerID string) *discordgo.InteractionResponseDa
 	}
 
 	embed := &discordgo.MessageEmbed{
-		Title:       fmt.Sprintf("You have **__%d__** cards in your hand", len(player.Hand)),
-		Description: desc,
+		Title:       turnTitle,
+		Description: fmt.Sprintf("You have **__%d__** cards in your hand", len(player.Hand)),
 		Color:       0xFF0000, // Red color code
 	}
 
@@ -236,8 +292,8 @@ func (g *Game) RenderUpdate(s *discordgo.Session) {
 	// Update the game view
 	if g.Interaction != nil {
 		_, err := s.InteractionResponseEdit(g.Interaction, &discordgo.WebhookEdit{
-			Embeds:     &g.RenderEmbed().Embeds,
-			Components: &g.RenderEmbed().Components,
+			Embeds:     &g.RenderEmbed(s).Embeds,
+			Components: &g.RenderEmbed(s).Components,
 		})
 		if err != nil {
 			log.Printf("Failed to update game view: %v", err)

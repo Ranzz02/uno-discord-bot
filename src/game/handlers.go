@@ -39,15 +39,11 @@ func (g *Game) AddPlayer(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	g.Players = append(g.Players, &Player{
-		User: i.Member.User,
-		Hand: DrawCards(g, 7),
-		Role: Normal,
-	})
+	g.NewPlayer(i.Member.User, Normal, 7)
 
 	// Respond with the updated embed, rendering the correct buttons
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Data: g.RenderEmbed(),
+		Data: g.RenderEmbed(s),
 		Type: discordgo.InteractionResponseUpdateMessage,
 	})
 
@@ -68,7 +64,7 @@ func (g *Game) LeaveGame(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
-		Data: g.RenderEmbed(),
+		Data: g.RenderEmbed(s),
 	})
 }
 
@@ -78,7 +74,7 @@ func (g *Game) StartGame(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		g.State = Playing
 		// Send an update with the embed (you can modify the existing message or send a new one)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Data: g.RenderEmbed(),
+			Data: g.RenderEmbed(s),
 			Type: discordgo.InteractionResponseUpdateMessage,
 		})
 	} else if len(g.Players) >= 2 {
@@ -139,6 +135,10 @@ func (g *Game) Delete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 // View card deck
 func (g *Game) ViewCards(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	player := g.GetPlayer(i.Member.User.ID)
+	if player == nil {
+		return
+	}
+
 	player.Interaction = i.Interaction
 
 	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{

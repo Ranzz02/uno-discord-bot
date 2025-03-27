@@ -23,6 +23,7 @@ func (g *Game) NextTurn() {
 
 // Tries to play a players card on their turn
 func (g *Game) PlayCard(s *discordgo.Session, i *discordgo.InteractionCreate, cardID string) {
+	g.UNO = false
 	player := g.GetCurrentPlayer()
 
 	var card *Card
@@ -38,6 +39,7 @@ func (g *Game) PlayCard(s *discordgo.Session, i *discordgo.InteractionCreate, ca
 	}
 
 	if !g.CanPlayCard(card) {
+		// TODO: Add error response
 		return
 	}
 
@@ -59,6 +61,10 @@ func (g *Game) PlayCard(s *discordgo.Session, i *discordgo.InteractionCreate, ca
 		g.NextTurn()
 	case ReverseCard:
 		g.Reversed = !g.Reversed
+		if len(g.Players) == 2 {
+			// 2 Player reverse works as skip
+			g.NextTurn()
+		}
 		g.NextTurn()
 	case DrawTwoCard:
 		// Force the next player to draw two cards and skip their turn.
@@ -68,106 +74,59 @@ func (g *Game) PlayCard(s *discordgo.Session, i *discordgo.InteractionCreate, ca
 		g.NextTurn()
 		g.NextTurn()
 	case WildCard:
-		g.ChangeColor(s, i)
+		// Block until color selection is completed
+		selectedColor := g.ChangeColor(s, i)
+		g.CurrentColor = &selectedColor
+
 		// Move to the next player's turn.
 		g.NextTurn()
 	case WildDrawFourCard:
-		// Force the next player to draw four cards and skip their turn.
-		g.ChangeColor(s, i)
-		nextPlayer := g.GetNextPlayer()
-		drawnCards := DrawCards(g, 4)
-		nextPlayer.Hand = append(nextPlayer.Hand, drawnCards...)
-		// Skip the next player's turn after they draw.
-		g.NextTurn()
+		// Block until color selection is completed
+		selectedColor := g.ChangeColor(s, i)
+		g.CurrentColor = &selectedColor
+
+		// Challenge draw four
+		challenged := g.ChallengeChoice(s, i)
+
+		log.Printf("Got answer for challenge: %v", challenged)
+
+		if challenged {
+			player := g.GetCurrentPlayer()
+
+			if player.HasValidPreviousPlay(g) { // If not only valid card draw 4
+				drawnCards := DrawCards(g, 4)
+				player.Hand = append(player.Hand, drawnCards...)
+			} else { // Punish next player and draw 6 cards
+				nextPlayer := g.GetNextPlayer()
+				drawnCards := DrawCards(g, 6)
+				nextPlayer.Hand = append(nextPlayer.Hand, drawnCards...)
+
+				// The challenger loses the challenge and their turn is skipped
+				g.NextTurn()
+			}
+		} else {
+			nextPlayer := g.GetNextPlayer()
+			drawnCards := DrawCards(g, 4)
+			nextPlayer.Hand = append(nextPlayer.Hand, drawnCards...)
+
+			// The challenger loses the challenge and their turn is skipped
+			g.NextTurn()
+		}
+
+		// Move to the next player's turn.
 		g.NextTurn()
 	}
 
 	if len(player.Hand) == 1 {
 		g.UNO = true
 	}
-}
 
-// Change the current color for Wild and WildDrawFour cards
-func (g *Game) ChangeColor(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	// Send an ephemeral message asking the player to select a color
-	colorPrompt := "Please select a color for the Wild card!"
-
-	// Send the message to the player, this will be ephemeral (only visible to the player)
-	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Data: &discordgo.InteractionResponseData{
-			Embeds: []*discordgo.MessageEmbed{
-				{
-					Title:       "Select color",
-					Description: colorPrompt,
-				},
-			},
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{
-					Components: []discordgo.MessageComponent{
-						&discordgo.Button{
-							Label:    "🟥 Red",
-							Style:    discordgo.SecondaryButton,
-							CustomID: "color_red",
-						},
-						&discordgo.Button{
-							Label:    "🟩 Green",
-							Style:    discordgo.SecondaryButton,
-							CustomID: "color_green",
-						},
-						&discordgo.Button{
-							Label:    "🟦 Blue",
-							Style:    discordgo.SecondaryButton,
-							CustomID: "color_blue",
-						},
-						&discordgo.Button{
-							Label:    "🟨 Yellow",
-							Style:    discordgo.SecondaryButton,
-							CustomID: "color_yellow",
-						},
-					},
-				},
-			},
-			Flags: discordgo.MessageFlagsEphemeral,
-		},
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-	})
-	if err != nil {
-		log.Printf("Error sending color selection message: %v", err)
-		return
+	if len(player.Hand) == 0 {
+		g.EndGame(s, player)
 	}
 
-	// Wait for the user to react with one of the color emojis
-	g.WaitForColorSelection(s, i)
-}
-
-func (g *Game) WaitForColorSelection(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	s.AddHandlerOnce(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		if i.Type != discordgo.InteractionMessageComponent {
-			return
-		}
-
-		data := i.MessageComponentData()
-
-		var selectedColor string
-		switch data.CustomID {
-		case "🟥":
-			selectedColor = "color_red"
-		case "🟩":
-			selectedColor = "color_green"
-		case "🟦":
-			selectedColor = "color_blue"
-		case "🟨":
-			selectedColor = "color_yellow"
-		default:
-			// If the reaction is not valid, ignore it
-			return
-		}
-
-		// Update the game state with the selected color
-		g.CurrentColor = &selectedColor
-
-		g.NextTurn()
-	})
+	// Force a render update after any interaction
+	g.RenderUpdate(s)
 }
 
 func (g *Game) DrawCard(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -179,4 +138,7 @@ func (g *Game) DrawCard(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	// Go to next turn
 	g.NextTurn()
+
+	// Force a render update after any interaction
+	g.RenderUpdate(s)
 }

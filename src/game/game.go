@@ -1,22 +1,28 @@
 package game
 
 import (
+	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	gonanoid "github.com/matoous/go-nanoid/v2"
 )
 
 const (
-	StartButton string = "start_button"
-	JoinButton  string = "join_button"
-	LeaveButton string = "leave_button"
-	EndButton   string = "end_button"
+	StartButton  string = "start_button"
+	JoinButton   string = "join_button"
+	LeaveButton  string = "leave_button"
+	EndButton    string = "end_button"
+	ReplayButton string = "replay_button"
 	// Playing
 	UNOButton       string = "uno_button"
 	ViewCardsButton string = "view_cards_button"
 	DrawCardAction  string = "draw-card"
+	// Challenge buttons
+	ChallengeButton       string = "challenge_button"
+	ChallengeIgnoreButton string = "challenge_ignore"
 )
 
 var (
@@ -44,6 +50,7 @@ type Game struct {
 	Host         string
 	Interaction  *discordgo.Interaction
 	CurrentColor *string
+	Winner       *Player
 }
 
 // Start a new game
@@ -83,17 +90,35 @@ func NewGame(i *discordgo.InteractionCreate) *Game {
 	game.DiscardPile = append(game.DiscardPile, firstCard)
 	game.Deck = game.Deck[1:] // Remove the first card from the deck
 
-	game.Players = append(game.Players, &Player{
-		User: i.Member.User,
-		Hand: DrawCards(game, 7),
-		Role: Host,
-	})
+	// Add host to game
+	game.NewPlayer(i.Member.User, Host, 7)
 
 	gamesMux.Lock()
 	games[i.ChannelID] = game
 	gamesMux.Unlock()
 
 	return game
+}
+
+// End game with winner
+func (g *Game) EndGame(s *discordgo.Session, player *Player) {
+	g.State = EndScreen
+	g.Winner = player
+
+	// Delete view hands
+	for _, player := range g.Players {
+		if player.Interaction != nil {
+			s.InteractionResponseDelete(player.Interaction)
+		}
+	}
+
+	// Remove game from games
+	gamesMux.Lock()
+	defer gamesMux.Unlock()
+	delete(games, g.ID)
+
+	// Update UI
+	g.RenderUpdate(s)
 }
 
 // Find a game
@@ -160,4 +185,204 @@ func (g *Game) CanPlayCard(card *Card) bool {
 	}
 
 	return false
+}
+
+// Function to check if card can be played
+func (g *Game) CanPlayPreviousCard(card *Card) bool {
+	topCard := g.DiscardPile[len(g.DiscardPile)-2]
+
+	if card.Type == WildCard || card.Type == WildDrawFourCard {
+		return true
+	}
+
+	// Split the card name to get color and type (number)
+	cardDetails := strings.Split(card.Name, "-")
+	cardColor := cardDetails[0]
+	cardType := cardDetails[1]
+
+	// Split the top card to get the color and type
+	topCardDetails := strings.Split(topCard.Name, "-")
+	topCardColor := topCardDetails[0]
+	topCardType := topCardDetails[1]
+
+	// If wild card
+	if topCardColor == "wild" && g.CurrentColor != nil && *g.CurrentColor == cardColor {
+		return true
+	}
+
+	// Check if the card can be played (must match either color or type)
+	if cardColor == topCardColor || cardType == topCardType {
+		return true
+	}
+
+	return false
+}
+
+// Change the current color for Wild and WildDrawFour cards
+func (g *Game) ChangeColor(s *discordgo.Session, i *discordgo.InteractionCreate) string {
+	// Send an ephemeral message asking the player to select a color
+	colorPrompt := "Please select a color for the Wild card!"
+
+	// Send the message to the player, this will be ephemeral (only visible to the player)
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Data: &discordgo.InteractionResponseData{
+			Embeds: []*discordgo.MessageEmbed{
+				{
+					Title:       "Select color",
+					Description: colorPrompt,
+				},
+			},
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						&discordgo.Button{
+							Label:    "🟥 Red",
+							Style:    discordgo.SecondaryButton,
+							CustomID: "color_red",
+						},
+						&discordgo.Button{
+							Label:    "🟩 Green",
+							Style:    discordgo.SecondaryButton,
+							CustomID: "color_green",
+						},
+						&discordgo.Button{
+							Label:    "🟦 Blue",
+							Style:    discordgo.SecondaryButton,
+							CustomID: "color_blue",
+						},
+						&discordgo.Button{
+							Label:    "🟨 Yellow",
+							Style:    discordgo.SecondaryButton,
+							CustomID: "color_yellow",
+						},
+					},
+				},
+			},
+			Flags: discordgo.MessageFlagsEphemeral,
+		},
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+	})
+	if err != nil {
+		log.Printf("Error sending color selection message: %v", err)
+		return ""
+	}
+
+	// Wait for the user to react with one of the color emojis
+	return g.WaitForColorSelection(s, i)
+}
+
+func (g *Game) WaitForColorSelection(s *discordgo.Session, i *discordgo.InteractionCreate) string {
+	colorChan := make(chan string)
+
+	// Timeout of 30 seconds
+	timeout := time.After(30 * time.Second)
+
+	s.AddHandlerOnce(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if i.Type != discordgo.InteractionMessageComponent {
+			return
+		}
+
+		data := i.MessageComponentData()
+
+		var selectedColor string
+		switch data.CustomID {
+		case "color_red":
+			selectedColor = "red"
+		case "color_green":
+			selectedColor = "green"
+		case "color_blue":
+			selectedColor = "blue"
+		case "color_yellow":
+			selectedColor = "yellow"
+		default:
+			// If the reaction is not valid, ignore it
+			return
+		}
+
+		// send the selected color to the channel
+		colorChan <- selectedColor
+
+		// Acknowledge the interaction
+		s.InteractionResponseDelete(i.Interaction)
+	})
+
+	select {
+	case selectedColor := <-colorChan:
+		return selectedColor
+	case <-timeout:
+		return "red"
+	}
+}
+
+func (g *Game) ChallengeChoice(s *discordgo.Session, i *discordgo.InteractionCreate) bool {
+	nextPlayer := g.GetNextPlayer()
+
+	// Send the message to the player, this will be ephemeral (only visible to the player)
+	_, err := s.InteractionResponseEdit(nextPlayer.Interaction, &discordgo.WebhookEdit{
+		Embeds: &[]*discordgo.MessageEmbed{
+			{
+				Title:       "Challenge wild draw four!",
+				Description: "Do you want to challenge the Wild Draw Four?",
+			},
+		},
+		Components: &[]discordgo.MessageComponent{
+			discordgo.ActionsRow{
+				Components: []discordgo.MessageComponent{
+					&discordgo.Button{
+						Label:    "Challenge",
+						Style:    discordgo.DangerButton,
+						CustomID: ChallengeButton,
+					},
+					&discordgo.Button{
+						Label:    "Ignore",
+						Style:    discordgo.SecondaryButton,
+						CustomID: ChallengeIgnoreButton,
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("Error sending color selection message: %v", err)
+		return false
+	}
+
+	// Wait for the user to react with one of the color emojis
+	return g.WaitForChallengeSelection(s)
+}
+
+func (g *Game) WaitForChallengeSelection(s *discordgo.Session) bool {
+	playerChoice := make(chan bool)
+
+	timeout := time.After(30 * time.Second)
+
+	s.AddHandlerOnce(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if i.Type != discordgo.InteractionMessageComponent {
+			return
+		}
+
+		data := i.MessageComponentData()
+
+		var choice bool
+		switch data.CustomID {
+		case ChallengeButton:
+			choice = true
+		case ChallengeIgnoreButton:
+			choice = false
+		default:
+			return
+		}
+
+		playerChoice <- choice
+	})
+
+	// Wait for a response or the timeout
+	select {
+	case selectedChoice := <-playerChoice:
+		log.Printf("Challenge choice made: %v", selectedChoice)
+		return selectedChoice // Player responded
+	case <-timeout:
+		log.Printf("Timeouted: %v", timeout)
+		return false // Timeout occurred, default choice (false)
+	}
 }

@@ -25,7 +25,7 @@ func CommandHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 		// Send the lobby message
 		err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Data: game.RenderEmbed(),
+			Data: game.RenderEmbed(s),
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 		})
 		if err != nil {
@@ -58,28 +58,35 @@ func ButtonHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	// Switch on customID of button
 	switch {
 	case data.CustomID == game.StartButton:
+		// Start game
 		g.StartGame(s, i)
 	case data.CustomID == game.JoinButton:
+		// Add player to game
 		g.AddPlayer(s, i)
 	case data.CustomID == game.LeaveButton:
+		// Leave game
 		g.LeaveGame(s, i)
 	case data.CustomID == game.EndButton:
+		// Pre-End game
 		g.Delete(s, i)
 	case data.CustomID == game.UNOButton:
+		// Call UNO
+	case data.CustomID == game.ReplayButton:
+		// Replay button
 	case data.CustomID == game.ViewCardsButton:
+		// Create a view of players hand
 		g.ViewCards(s, i)
 	case data.CustomID == game.DrawCardAction: // Draw one card from deck
+		// Draw a card from the pile
 		g.DrawCard(s, i)
 	case strings.HasPrefix(data.CustomID, "card-"):
+		// Play card
 		cardID := strings.TrimPrefix(data.CustomID, "card-")
 		g.PlayCard(s, i, cardID)
 	default:
 		// If the CustomID doesn't match any known button action
 		log.Printf("Unknown button action: %s", data.CustomID)
 	}
-
-	// Force a render update after any interaction
-	g.RenderUpdate(s)
 
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Data: nil,
