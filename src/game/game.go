@@ -23,6 +23,13 @@ const (
 	// Challenge buttons
 	ChallengeButton       string = "challenge_button"
 	ChallengeIgnoreButton string = "challenge_ignore"
+	// Pagination buttons
+	PreviousButton string = "previous_button"
+	NextButton     string = "next_button"
+)
+
+const (
+	MAX_CARDS_PER_PAGE int = 15
 )
 
 var (

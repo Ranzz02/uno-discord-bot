@@ -83,6 +83,24 @@ func ButtonHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		// Play card
 		cardID := strings.TrimPrefix(data.CustomID, "card-")
 		g.PlayCard(s, i, cardID)
+	case data.CustomID == game.PreviousButton: // Previous hand
+		player := g.GetPlayer(i.Member.User.ID)
+		if player != nil && player.Page > 0 {
+			player.Page--
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseUpdateMessage,
+				Data: g.RenderPlayerHand(player.User.ID),
+			})
+		}
+	case data.CustomID == game.NextButton: // Next hand
+		player := g.GetPlayer(i.Member.User.ID)
+		if player != nil && player.Page < game.MAX_CARDS_PER_PAGE-1 {
+			player.Page++
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseUpdateMessage,
+				Data: g.RenderPlayerHand(player.User.ID),
+			})
+		}
 	default:
 		// If the CustomID doesn't match any known button action
 		log.Printf("Unknown button action: %s", data.CustomID)

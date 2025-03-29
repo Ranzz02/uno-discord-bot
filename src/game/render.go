@@ -223,8 +223,11 @@ func playersList(g *Game) []*discordgo.MessageEmbedField {
 	}
 }
 
-func renderPlayerHand(g *Game, playerID string) *discordgo.InteractionResponseData {
+func (g *Game) RenderPlayerHand(playerID string) *discordgo.InteractionResponseData {
 	player := g.GetPlayer(playerID)
+	if player == nil {
+		return nil
+	}
 
 	turnTitle := "It's your turn!"
 	if g.GetCurrentPlayer().User.ID != playerID {
@@ -232,8 +235,21 @@ func renderPlayerHand(g *Game, playerID string) *discordgo.InteractionResponseDa
 	}
 
 	// Create buttons for each card
+	totalPages := (len(player.Hand) + MAX_CARDS_PER_PAGE - 1) / MAX_CARDS_PER_PAGE
+	if player.Page < 0 {
+		player.Page = 0
+	} else if player.Page >= totalPages {
+		player.Page = totalPages - 1
+	}
+
+	startIdx := player.Page * MAX_CARDS_PER_PAGE
+	endIdx := startIdx + MAX_CARDS_PER_PAGE
+	if endIdx > len(player.Hand) {
+		endIdx = len(player.Hand)
+	}
+
 	var cardButtons []discordgo.MessageComponent
-	for _, card := range player.Hand {
+	for _, card := range player.Hand[startIdx:endIdx] {
 		var colorEmoji string
 		switch strings.Split(card.Name, "-")[0] {
 		case "red":
@@ -255,13 +271,6 @@ func renderPlayerHand(g *Game, playerID string) *discordgo.InteractionResponseDa
 			Disabled: g.GetCurrentPlayer().User.ID != player.User.ID || !g.CanPlayCard(&card), // Disable if not player's turn
 		})
 	}
-	// Add the "Draw Card" button separately
-	cardButtons = append(cardButtons, &discordgo.Button{
-		Label:    "Draw card",
-		Style:    discordgo.SecondaryButton,
-		CustomID: "draw-card",
-		Disabled: g.GetCurrentPlayer().User.ID != player.User.ID,
-	})
 
 	// Group buttons into rows (max 5 buttons per row)
 	var rows []discordgo.MessageComponent
@@ -275,10 +284,34 @@ func renderPlayerHand(g *Game, playerID string) *discordgo.InteractionResponseDa
 		})
 	}
 
+	rows = append(rows, &discordgo.ActionsRow{
+		Components: []discordgo.MessageComponent{
+			&discordgo.Button{
+				Label:    "⬅️ Previous cards",
+				Style:    discordgo.SuccessButton,
+				CustomID: PreviousButton,
+				Disabled: len(player.Hand) <= MAX_CARDS_PER_PAGE || player.Page <= 0, // Disable if not player's turn
+			},
+			&discordgo.Button{
+				Label:    "➡️ Next cards",
+				Style:    discordgo.SuccessButton,
+				CustomID: NextButton,
+				Disabled: len(player.Hand) <= MAX_CARDS_PER_PAGE || player.Page >= totalPages-1, // Disable if not player's turn
+			},
+			&discordgo.Button{
+				Label:    "Draw card",
+				Style:    discordgo.SecondaryButton,
+				CustomID: "draw-card",
+				Disabled: g.GetCurrentPlayer().User.ID != player.User.ID,
+			},
+		},
+	})
+
 	embed := &discordgo.MessageEmbed{
-		Title:       turnTitle,
-		Description: fmt.Sprintf("You have **__%d__** cards in your hand", len(player.Hand)),
-		Color:       0xFF0000, // Red color code
+		Title: turnTitle,
+		Description: fmt.Sprintf(`Currently on page %d/%d
+			You have a total of **__%d__** cards in your hand`, player.Page+1, totalPages, len(player.Hand)),
+		Color: 0xFF0000, // Red color code
 	}
 
 	return &discordgo.InteractionResponseData{
@@ -307,8 +340,8 @@ func (g *Game) RenderUpdate(s *discordgo.Session) {
 		}
 
 		_, err := s.InteractionResponseEdit(player.Interaction, &discordgo.WebhookEdit{
-			Embeds:     &renderPlayerHand(g, player.User.ID).Embeds,
-			Components: &renderPlayerHand(g, player.User.ID).Components,
+			Embeds:     &g.RenderPlayerHand(player.User.ID).Embeds,
+			Components: &g.RenderPlayerHand(player.User.ID).Components,
 		})
 		if err != nil {
 			log.Printf("Failed to update player hand: %v", err)

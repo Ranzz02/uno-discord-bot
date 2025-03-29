@@ -143,7 +143,7 @@ func (g *Game) ViewCards(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: renderPlayerHand(g, player.User.ID),
+		Data: g.RenderPlayerHand(player.User.ID),
 	})
 	if err != nil {
 		log.Printf("Failed to create view_cards: %v", err)

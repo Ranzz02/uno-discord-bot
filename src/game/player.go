@@ -14,6 +14,7 @@ type Player struct {
 	Hand        []Card
 	Role        PlayerRole
 	Interaction *discordgo.Interaction
+	Page        int
 }
 
 func (p *Player) HasValidPreviousPlay(g *Game) bool {
