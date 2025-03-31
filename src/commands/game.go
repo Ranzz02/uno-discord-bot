@@ -111,3 +111,85 @@ func ButtonHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		Type: discordgo.InteractionResponseUpdateMessage,
 	})
 }
+
+func ColorHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.Type != discordgo.InteractionMessageComponent {
+		return
+	}
+
+	data := i.MessageComponentData()
+
+	g := game.FindGame(i.ChannelID)
+	if g == nil {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Data: &discordgo.InteractionResponseData{
+				Content: "Game ended or crashed, start a new one.",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+		})
+		return
+	}
+
+	if g.ColorData.User != i.Member.User.ID {
+		return
+	}
+
+	var selectedColor string
+	switch data.CustomID {
+	case "color_red":
+		selectedColor = "red"
+	case "color_green":
+		selectedColor = "green"
+	case "color_blue":
+		selectedColor = "blue"
+	case "color_yellow":
+		selectedColor = "yellow"
+	default:
+		// If the reaction is not valid, ignore it
+		return
+	}
+
+	g.ColorData.ColorResponse <- selectedColor
+
+	s.InteractionResponseDelete(i.Interaction)
+}
+
+func ChallengeHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.Type != discordgo.InteractionMessageComponent {
+		return
+	}
+
+	data := i.MessageComponentData()
+
+	g := game.FindGame(i.ChannelID)
+	if g == nil {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Data: &discordgo.InteractionResponseData{
+				Content: "Game ended or crashed, start a new one.",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+		})
+		return
+	}
+
+	if g.ChallengeData.User != i.Member.User.ID {
+		return
+	}
+
+	switch data.CustomID {
+	case game.ChallengeButton:
+		g.ChallengeData.ChallengeResponse <- true
+	case game.ChallengeIgnoreButton:
+		g.ChallengeData.ChallengeResponse <- false
+	default:
+		// If the reaction is not valid, ignore it
+		return
+	}
+
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Data: nil,
+		Type: discordgo.InteractionResponseUpdateMessage,
+	})
+}

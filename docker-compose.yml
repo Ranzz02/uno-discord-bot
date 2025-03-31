@@ -1,0 +1,9 @@
+services:
+  bot:
+    image: ${DOCKER_USER}/${IMAGE_NAME}:${VERSION}
+    build: .
+    restart: on-failure
+    container_name: uno-bot
+    env_file:
+      - .env
+    tty: true

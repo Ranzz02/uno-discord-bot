@@ -1,8 +1,6 @@
 package game
 
 import (
-	"log"
-
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -75,21 +73,14 @@ func (g *Game) PlayCard(s *discordgo.Session, i *discordgo.InteractionCreate, ca
 		g.NextTurn()
 	case WildCard:
 		// Block until color selection is completed
-		selectedColor := g.ChangeColor(s, i)
-		g.CurrentColor = &selectedColor
-
+		g.ChangeColor(s, i)
 		// Move to the next player's turn.
 		g.NextTurn()
 	case WildDrawFourCard:
 		// Block until color selection is completed
-		selectedColor := g.ChangeColor(s, i)
-		g.CurrentColor = &selectedColor
-
+		g.ChangeColor(s, i)
 		// Challenge draw four
 		challenged := g.ChallengeChoice(s, i)
-
-		log.Printf("Got answer for challenge: %v", challenged)
-
 		if challenged {
 			player := g.GetCurrentPlayer()
 

@@ -68,7 +68,11 @@ func (g *Game) RenderEmbed(s *discordgo.Session) *discordgo.InteractionResponseD
 				"yellow": "🟨",
 			}
 
-			selectedColor := *g.CurrentColor
+			selectedColor := "red"
+			if g.ColorData.CurrentColor != nil {
+				selectedColor = *g.ColorData.CurrentColor
+			}
+
 			colorEmoji, exists := colorEmojiMap[selectedColor]
 			if !exists {
 				colorEmoji = "⬜" // Default if color isn't set
@@ -232,6 +236,19 @@ func (g *Game) RenderPlayerHand(playerID string) *discordgo.InteractionResponseD
 	turnTitle := "It's your turn!"
 	if g.GetCurrentPlayer().User.ID != playerID {
 		turnTitle = fmt.Sprintf("It's %s turn", g.GetCurrentPlayer().User.Username)
+	}
+
+	// Special handling for empty hand
+	if len(player.Hand) == 0 {
+		embed := &discordgo.MessageEmbed{
+			Title:       turnTitle,
+			Description: "You have no cards left!",
+			Color:       0xFF0000, // Red color code
+		}
+		return &discordgo.InteractionResponseData{
+			Embeds: []*discordgo.MessageEmbed{embed},
+			Flags:  discordgo.MessageFlagsEphemeral,
+		}
 	}
 
 	// Create buttons for each card

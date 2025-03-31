@@ -46,18 +46,30 @@ const (
 )
 
 type Game struct {
-	ID           string
-	Deck         []Card
-	DiscardPile  []Card
-	Players      []*Player
-	CurrentTurn  int
-	Reversed     bool
-	UNO          bool
-	State        GameState
-	Host         string
-	Interaction  *discordgo.Interaction
-	CurrentColor *string
-	Winner       *Player
+	ID            string
+	Deck          []Card
+	DiscardPile   []Card
+	Players       []*Player
+	CurrentTurn   int
+	Reversed      bool
+	UNO           bool
+	State         GameState
+	Host          string
+	Interaction   *discordgo.Interaction
+	ColorData     ColorData
+	ChallengeData ChallengeData
+	Winner        *Player
+}
+
+type ColorData struct {
+	ColorResponse chan string
+	CurrentColor  *string
+	User          string
+}
+
+type ChallengeData struct {
+	ChallengeResponse chan bool
+	User              string
 }
 
 // Start a new game
@@ -77,6 +89,12 @@ func NewGame(i *discordgo.InteractionCreate) *Game {
 		UNO:         false,
 		Host:        i.Member.User.ID,
 		Interaction: i.Interaction,
+		ColorData: ColorData{
+			ColorResponse: make(chan string),
+		},
+		ChallengeData: ChallengeData{
+			ChallengeResponse: make(chan bool),
+		},
 	}
 
 	// Shuffle deck
@@ -182,7 +200,7 @@ func (g *Game) CanPlayCard(card *Card) bool {
 	topCardType := topCardDetails[1]
 
 	// If wild card
-	if topCardColor == "wild" && g.CurrentColor != nil && *g.CurrentColor == cardColor {
+	if topCardColor == "wild" && g.ColorData.CurrentColor != nil && *g.ColorData.CurrentColor == cardColor {
 		return true
 	}
 
@@ -213,7 +231,7 @@ func (g *Game) CanPlayPreviousCard(card *Card) bool {
 	topCardType := topCardDetails[1]
 
 	// If wild card
-	if topCardColor == "wild" && g.CurrentColor != nil && *g.CurrentColor == cardColor {
+	if topCardColor == "wild" && g.ColorData.CurrentColor != nil && *g.ColorData.CurrentColor == cardColor {
 		return true
 	}
 
@@ -275,54 +293,25 @@ func (g *Game) ChangeColor(s *discordgo.Session, i *discordgo.InteractionCreate)
 	}
 
 	// Wait for the user to react with one of the color emojis
-	return g.WaitForColorSelection(s, i)
+	selectedColor := g.WaitForColorSelection(s, i)
+	g.ColorData.CurrentColor = &selectedColor
+	return selectedColor
 }
 
 func (g *Game) WaitForColorSelection(s *discordgo.Session, i *discordgo.InteractionCreate) string {
-	colorChan := make(chan string)
-
-	// Timeout of 30 seconds
-	timeout := time.After(30 * time.Second)
-
-	s.AddHandlerOnce(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		if i.Type != discordgo.InteractionMessageComponent {
-			return
-		}
-
-		data := i.MessageComponentData()
-
-		var selectedColor string
-		switch data.CustomID {
-		case "color_red":
-			selectedColor = "red"
-		case "color_green":
-			selectedColor = "green"
-		case "color_blue":
-			selectedColor = "blue"
-		case "color_yellow":
-			selectedColor = "yellow"
-		default:
-			// If the reaction is not valid, ignore it
-			return
-		}
-
-		// send the selected color to the channel
-		colorChan <- selectedColor
-
-		// Acknowledge the interaction
-		s.InteractionResponseDelete(i.Interaction)
-	})
+	g.ColorData.User = i.Member.User.ID
 
 	select {
-	case selectedColor := <-colorChan:
+	case selectedColor := <-g.ColorData.ColorResponse:
 		return selectedColor
-	case <-timeout:
+	case <-time.After(30 * time.Second):
 		return "red"
 	}
 }
 
 func (g *Game) ChallengeChoice(s *discordgo.Session, i *discordgo.InteractionCreate) bool {
 	nextPlayer := g.GetNextPlayer()
+	g.ChallengeData.User = nextPlayer.User.ID
 
 	// Send the message to the player, this will be ephemeral (only visible to the player)
 	_, err := s.InteractionResponseEdit(nextPlayer.Interaction, &discordgo.WebhookEdit{
@@ -355,41 +344,16 @@ func (g *Game) ChallengeChoice(s *discordgo.Session, i *discordgo.InteractionCre
 	}
 
 	// Wait for the user to react with one of the color emojis
-	return g.WaitForChallengeSelection(s)
+	return g.WaitForChallengeSelection(s, i)
 }
 
-func (g *Game) WaitForChallengeSelection(s *discordgo.Session) bool {
-	playerChoice := make(chan bool)
-
-	timeout := time.After(30 * time.Second)
-
-	s.AddHandlerOnce(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		if i.Type != discordgo.InteractionMessageComponent {
-			return
-		}
-
-		data := i.MessageComponentData()
-
-		var choice bool
-		switch data.CustomID {
-		case ChallengeButton:
-			choice = true
-		case ChallengeIgnoreButton:
-			choice = false
-		default:
-			return
-		}
-
-		playerChoice <- choice
-	})
-
-	// Wait for a response or the timeout
+func (g *Game) WaitForChallengeSelection(s *discordgo.Session, i *discordgo.InteractionCreate) bool {
+	// Wait for a response or timeout
 	select {
-	case selectedChoice := <-playerChoice:
+	case selectedChoice := <-g.ChallengeData.ChallengeResponse:
 		log.Printf("Challenge choice made: %v", selectedChoice)
 		return selectedChoice // Player responded
-	case <-timeout:
-		log.Printf("Timeouted: %v", timeout)
+	case <-time.After(30 * time.Second):
 		return false // Timeout occurred, default choice (false)
 	}
 }

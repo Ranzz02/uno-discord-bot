@@ -8,6 +8,7 @@ import (
 
 const (
 	StartCMD string = "uno"
+	HelpCMD  string = "help"
 )
 
 var (
@@ -15,6 +16,10 @@ var (
 		{
 			Name:        StartCMD,
 			Description: "Start a new uno game",
+		},
+		{
+			Name:        HelpCMD,
+			Description: "Help with how to use the uno bot",
 		},
 	}
 )

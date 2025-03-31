@@ -32,6 +32,7 @@ func (g *Game) NewPlayer(user *discordgo.User, role PlayerRole, initCards int) {
 		User: user,
 		Hand: DrawCards(g, initCards),
 		Role: role,
+		Page: 0,
 	})
 }
 

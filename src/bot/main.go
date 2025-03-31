@@ -23,6 +23,8 @@ func InitBot() {
 
 	Bot.AddHandler(commands.CommandHandler)
 	Bot.AddHandler(commands.ButtonHandler)
+	Bot.AddHandler(commands.ColorHandler)
+	Bot.AddHandler(commands.ChallengeHandler)
 
 	Bot.Identify.Intents = discordgo.IntentsAllWithoutPrivileged
 
