@@ -1,6 +1,7 @@
 package game
 
 import (
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -17,9 +18,11 @@ const (
 	EndButton    string = "end_button"
 	ReplayButton string = "replay_button"
 	// Playing
-	UNOButton       string = "uno_button"
-	ViewCardsButton string = "view_cards_button"
-	DrawCardAction  string = "draw-card"
+	UNOButton           string = "uno_button"
+	ViewCardsButton     string = "view_cards_button"
+	DrawCardAction      string = "draw-card"
+	KeepCardAction      string = "keep-card"
+	PlayDrawnCardAction string = "play-drawn-card"
 	// Challenge buttons
 	ChallengeButton       string = "challenge_button"
 	ChallengeIgnoreButton string = "challenge_ignore"
@@ -58,6 +61,7 @@ type Game struct {
 	Interaction   *discordgo.Interaction
 	ColorData     ColorData
 	ChallengeData ChallengeData
+	KeepCardData  KeepCardData
 	Winner        *Player
 }
 
@@ -70,6 +74,11 @@ type ColorData struct {
 type ChallengeData struct {
 	ChallengeResponse chan bool
 	User              string
+}
+
+type KeepCardData struct {
+	KeepResponse chan bool
+	User         string
 }
 
 // Start a new game
@@ -90,10 +99,13 @@ func NewGame(i *discordgo.InteractionCreate) *Game {
 		Host:        i.Member.User.ID,
 		Interaction: i.Interaction,
 		ColorData: ColorData{
-			ColorResponse: make(chan string),
+			ColorResponse: make(chan string, 5),
 		},
 		ChallengeData: ChallengeData{
-			ChallengeResponse: make(chan bool),
+			ChallengeResponse: make(chan bool, 1),
+		},
+		KeepCardData: KeepCardData{
+			KeepResponse: make(chan bool, 1),
 		},
 	}
 
@@ -355,5 +367,75 @@ func (g *Game) WaitForChallengeSelection(s *discordgo.Session, i *discordgo.Inte
 		return selectedChoice // Player responded
 	case <-time.After(30 * time.Second):
 		return false // Timeout occurred, default choice (false)
+	}
+}
+
+func (g *Game) HandleDrawCard(s *discordgo.Session, i *discordgo.InteractionCreate) bool {
+	player := g.GetCurrentPlayer()
+
+	// Determine the color of the embed based on the card
+	var embedColor int
+	switch strings.Split(player.LastDrawnCard.Name, "-")[0] {
+	case "red":
+		embedColor = 0xFF0000
+	case "blue":
+		embedColor = 0x0000FF
+	case "green":
+		embedColor = 0x00FF00
+	case "yellow":
+		embedColor = 0xFFFF00
+	default:
+		embedColor = 0xFFFFFF // White for wild cards
+	}
+
+	// Create an embed showing the drawn card
+	embed := discordgo.MessageEmbed{
+		Title:       fmt.Sprintf("You drew a **%s**!", player.LastDrawnCard.Name),
+		Description: "Do you want to play it or keep it?",
+		Color:       embedColor,
+		Image: &discordgo.MessageEmbedImage{
+			URL: player.LastDrawnCard.Link,
+		},
+	}
+
+	// Ask the player to decide
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Data: &discordgo.InteractionResponseData{
+			Embeds: []*discordgo.MessageEmbed{&embed},
+			Components: []discordgo.MessageComponent{
+				&discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						&discordgo.Button{
+							Label:    "Play card",
+							Style:    discordgo.SuccessButton,
+							CustomID: PlayDrawnCardAction,
+							Disabled: !g.CanPlayCard(player.LastDrawnCard),
+						},
+						&discordgo.Button{
+							Label:    "Keep",
+							Style:    discordgo.SecondaryButton,
+							CustomID: KeepCardAction,
+						},
+					},
+				},
+			},
+		},
+		Type: discordgo.InteractionResponseUpdateMessage,
+	})
+	if err != nil {
+		log.Printf("Failed to ask to keep card: %v", err)
+		return false
+	}
+
+	return g.WaitForKeepCard(s, i)
+}
+
+// Wait for response or timeout after 10 seconds
+func (g *Game) WaitForKeepCard(s *discordgo.Session, i *discordgo.InteractionCreate) bool {
+	select {
+	case selectedChoice := <-g.KeepCardData.KeepResponse:
+		return selectedChoice
+	case <-time.After(10 * time.Second):
+		return true
 	}
 }

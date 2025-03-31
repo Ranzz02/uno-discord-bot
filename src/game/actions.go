@@ -126,10 +126,18 @@ func (g *Game) DrawCard(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	// Draw one card
 	card := DrawCards(g, 1)
 	player.Hand = append(player.Hand, card...)
+	player.LastDrawnCard = &card[0]
+	g.KeepCardData.User = i.Member.User.ID
 
-	// Go to next turn
-	g.NextTurn()
-
-	// Force a render update after any interaction
-	g.RenderUpdate(s)
+	// Wait for players response to keep the card or play it.
+	keepCard := g.HandleDrawCard(s, i)
+	if !keepCard {
+		// Try to play card
+		g.PlayCard(s, i, player.LastDrawnCard.ID)
+	} else {
+		// Go to next turn
+		g.NextTurn()
+		// Force a render update after any interaction
+		g.RenderUpdate(s)
+	}
 }

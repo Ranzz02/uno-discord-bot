@@ -14,7 +14,7 @@ push:
 	@docker push $(DOCKER_USER)/$(IMAGE_NAME):$(VERSION)
 
 # Build and push in one command
-deploy: build 
+deploy: build push
 
 test:
 	@docker-compose up --force-recreate --remove-orphans

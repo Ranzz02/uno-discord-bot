@@ -193,3 +193,36 @@ func ChallengeHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		Type: discordgo.InteractionResponseUpdateMessage,
 	})
 }
+
+func KeepCard(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.Type != discordgo.InteractionMessageComponent {
+		return
+	}
+
+	data := i.MessageComponentData()
+
+	g := game.FindGame(i.ChannelID)
+	if g == nil {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Data: &discordgo.InteractionResponseData{
+				Content: "Game ended or crashed, start a new one.",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+		})
+		return
+	}
+
+	if g.KeepCardData.User != i.Member.User.ID {
+		return
+	}
+
+	switch data.CustomID {
+	case game.KeepCardAction:
+		g.KeepCardData.KeepResponse <- true
+	case game.PlayDrawnCardAction:
+		g.KeepCardData.KeepResponse <- false
+	default:
+		return
+	}
+}

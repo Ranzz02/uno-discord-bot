@@ -10,11 +10,12 @@ const (
 )
 
 type Player struct {
-	User        *discordgo.User
-	Hand        []Card
-	Role        PlayerRole
-	Interaction *discordgo.Interaction
-	Page        int
+	User          *discordgo.User
+	Hand          []Card
+	Role          PlayerRole
+	Interaction   *discordgo.Interaction
+	LastDrawnCard *Card
+	Page          int
 }
 
 func (p *Player) HasValidPreviousPlay(g *Game) bool {
